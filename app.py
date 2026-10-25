@@ -206,14 +206,10 @@ def show_auth_screen():
             oauth_url = getattr(oauth, "url", None)
 
             if oauth_url:
+                # Removed the extra st.link_button to prevent duplicate buttons.
                 st.markdown(
                     f'<meta http-equiv="refresh" content="0;url={oauth_url}">',
                     unsafe_allow_html=True
-                )
-                st.link_button(
-                    "Continue to Google",
-                    oauth_url,
-                    use_container_width=True
                 )
             else:
                 st.error("Supabase did not return a Google sign-in URL.")
