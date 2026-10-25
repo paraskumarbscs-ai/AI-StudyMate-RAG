@@ -192,31 +192,35 @@ def show_auth_screen():
         return
 
     if st.button(
-        "Continue with Google",
-        key="start_google_oauth",
-        use_container_width=True
+    "Continue with Google",
+    key="start_google_oauth",
+    use_container_width=True
     ):
-        try:
-            oauth = supabase.auth.sign_in_with_oauth({
-                "provider": "google",
-                "options": {"redirect_to": APP_URL}
-            })
-            oauth_url = getattr(oauth, "url", None)
-            if oauth_url:
-                st.session_state["google_oauth_url"] = oauth_url
-                st.rerun()
-            else:
-                st.error("Supabase did not return a Google sign-in URL.")
-        except Exception as error:
-            st.error(f"Could not start Google sign-in: {error}")
+    try:
+        oauth = supabase.auth.sign_in_with_oauth({
+            "provider": "google",
+            "options": {
+                "redirect_to": APP_URL
+            }
+        })
 
-    saved_oauth_url = st.session_state.get("google_oauth_url")
-    if saved_oauth_url:
-        st.link_button(
-            "Open Google sign-in",
-            saved_oauth_url,
-            use_container_width=True
-        )
+        oauth_url = getattr(oauth, "url", None)
+
+        if oauth_url:
+            st.markdown(
+                f'<meta http-equiv="refresh" content="0;url={oauth_url}">',
+                unsafe_allow_html=True
+            )
+            st.link_button(
+                "Continue to Google",
+                oauth_url,
+                use_container_width=True
+            )
+        else:
+            st.error("Supabase did not return a Google sign-in URL.")
+
+    except Exception as error:
+        st.error(f"Could not start Google sign-in: {error}")
 
     login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
 
