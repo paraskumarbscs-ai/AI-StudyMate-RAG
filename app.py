@@ -2,7 +2,7 @@ import os
 import re
 import json
 import uuid
-import sqlite3
+import threading
 import hashlib
 import hmac
 import secrets
@@ -24,8 +24,6 @@ load_dotenv()
 # Uploaded PDF text/chunks/embeddings are deliberately NOT persisted to cloud.
 
 from supabase import create_client
-from supabase.client import ClientOptions
-
 
 def get_config(name, default=""):
     try:
@@ -42,36 +40,55 @@ SUPABASE_KEY = get_config("SUPABASE_ANON_KEY") or get_config("SUPABASE_PUBLISHAB
 APP_URL = get_config("APP_URL", "http://localhost:8501").rstrip("/")
 
 
-class StreamlitStorage:
-    """Custom storage to keep the PKCE verifier safe across Streamlit reruns/redirects."""
-    def get_item(self, key: str) -> str | None:
-        return st.session_state.get(key)
+# --- GLOBAL SERVER STORAGE FOR PKCE VERIFIER ---
+# Streamlit wipes session state when navigating away to Google and back.
+# We store the OAuth verifier in server memory safely so it survives the redirect.
+_SERVER_SHARED_MEMORY = {}
+_MEMORY_LOCK = threading.Lock()
 
-    def set_item(self, key: str, value: str) -> None:
-        st.session_state[key] = value
+class ServerSideStorage:
+    def get_item(self, key):
+        with _MEMORY_LOCK:
+            return _SERVER_SHARED_MEMORY.get(key)
 
-    def remove_item(self, key: str) -> None:
-        if key in st.session_state:
-            del st.session_state[key]
+    def set_item(self, key, value):
+        with _MEMORY_LOCK:
+            _SERVER_SHARED_MEMORY[key] = str(value)
 
+    def remove_item(self, key):
+        with _MEMORY_LOCK:
+            _SERVER_SHARED_MEMORY.pop(key, None)
+
+
+try:
+    from supabase.client import ClientOptions
+except ImportError:
+    try:
+        from supabase import ClientOptions
+    except ImportError:
+        ClientOptions = None
 
 def get_supabase():
-    """Keep one Supabase client per Streamlit browser session.
-    Backed by custom StreamlitStorage to safely survive the Google OAuth redirect.
-    """
+    """Keep one Supabase client per Streamlit browser session."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError(
             "Supabase configuration missing. Set SUPABASE_URL and "
             "SUPABASE_ANON_KEY in your .env file."
         )
 
+    # Initialize client with the ServerSide storage mapped to memory
     if "_sb_client" not in st.session_state:
-        opts = ClientOptions(storage=StreamlitStorage())
-        st.session_state["_sb_client"] = create_client(
-            SUPABASE_URL,
-            SUPABASE_KEY,
-            options=opts
-        )
+        storage = ServerSideStorage()
+        
+        if ClientOptions:
+            opts = ClientOptions(storage=storage)
+            client = create_client(SUPABASE_URL, SUPABASE_KEY, options=opts)
+        else:
+            client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            client.auth._storage = storage
+            
+        st.session_state["_sb_client"] = client
+        
     return st.session_state["_sb_client"]
 
 
@@ -114,6 +131,11 @@ def accept_auth_session(session):
     st.session_state.auth_user_id = str(session.user.id)
     st.session_state.auth_email = session.user.email or ""
     st.session_state.account_data_loaded = False
+    
+    # Flush global memory immediately after successful login to keep memory clean
+    with _MEMORY_LOCK:
+        _SERVER_SHARED_MEMORY.clear()
+        
     return True
 
 
@@ -137,8 +159,6 @@ def handle_oauth_callback():
         st.caption("The sign-in code may have expired or its PKCE verifier is missing. Start a fresh Google sign-in.")
         st.query_params.clear()
         st.session_state.pop("google_oauth_url", None)
-        # Clear the old client to force a fresh PKCE verifier on next attempt
-        st.session_state.pop("_sb_client", None)
 
 
 def load_user_payload(user_id):
@@ -195,8 +215,28 @@ def show_auth_screen():
     st.markdown("""
     <style>
     .block-container {max-width: 520px; padding-top: 3rem !important;}
+    .google-btn {
+        display: block;
+        width: 100%;
+        text-align: center;
+        background-color: #7047D7;
+        color: #FFFFFF !important;
+        padding: 12px 0;
+        border-radius: 10px;
+        font-weight: 600;
+        text-decoration: none;
+        margin-bottom: 1.5rem;
+        font-family: sans-serif;
+        border: 1px solid #7047D7;
+        transition: background-color 0.2s;
+    }
+    .google-btn:hover {
+        background-color: #5932B5;
+        border-color: #5932B5;
+    }
     </style>
     """, unsafe_allow_html=True)
+    
     st.markdown("# 🎓 AI StudyMate")
     st.markdown("### Your personal AI learning space")
     st.write("Sign in to access your saved chats, study documents, quizzes, and planner.")
@@ -206,7 +246,7 @@ def show_auth_screen():
         st.code("SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co\nSUPABASE_ANON_KEY=YOUR_PUBLISHABLE_OR_ANON_KEY")
         return
 
-    # Generate the OAuth URL upfront so it cleanly saves the PKCE state BEFORE navigation
+    # Pre-generate the URL so the PKCE verifier is fully saved to server memory BEFORE click
     if "google_oauth_url" not in st.session_state:
         try:
             oauth = supabase.auth.sign_in_with_oauth({
@@ -217,32 +257,13 @@ def show_auth_screen():
             })
             st.session_state.google_oauth_url = getattr(oauth, "url", None)
         except Exception as error:
-            st.session_state.google_oauth_url = None
+            st.error(f"Could not construct sign-in link: {error}")
 
     if st.session_state.get("google_oauth_url"):
-        oauth_url = st.session_state.google_oauth_url
-        # Injecting an HTML link with target="_self" ensures navigation happens
-        # in the same browser tab, preserving the Streamlit session state and PKCE verifier.
         st.markdown(
-            f'''
-            <a href="{oauth_url}" target="_self" style="
-                display: block;
-                width: 100%;
-                text-align: center;
-                background-color: #7047D7;
-                color: #FFFFFF;
-                padding: 10px 0;
-                border-radius: 10px;
-                font-weight: 600;
-                text-decoration: none;
-                margin-bottom: 1rem;
-                font-family: sans-serif;
-            ">Continue with Google</a>
-            ''',
+            f'<a href="{st.session_state.google_oauth_url}" target="_self" class="google-btn">Continue with Google</a>',
             unsafe_allow_html=True
         )
-    else:
-        st.error("Could not initialize Google sign-in.")
 
     login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
 
