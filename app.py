@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -190,37 +189,37 @@ def show_auth_screen():
         st.error("Supabase configuration is missing. Check SUPABASE_URL and SUPABASE_ANON_KEY in .env.")
         st.code("SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co\nSUPABASE_ANON_KEY=YOUR_PUBLISHABLE_OR_ANON_KEY")
         return
-
+        
     if st.button(
-    "Continue with Google",
-    key="start_google_oauth",
-    use_container_width=True
+        "Continue with Google",
+        key="start_google_oauth",
+        use_container_width=True
     ):
-    try:
-        oauth = supabase.auth.sign_in_with_oauth({
-            "provider": "google",
-            "options": {
-                "redirect_to": APP_URL
-            }
-        })
+        try:
+            oauth = supabase.auth.sign_in_with_oauth({
+                "provider": "google",
+                "options": {
+                    "redirect_to": APP_URL
+                }
+            })
 
-        oauth_url = getattr(oauth, "url", None)
+            oauth_url = getattr(oauth, "url", None)
 
-        if oauth_url:
-            st.markdown(
-                f'<meta http-equiv="refresh" content="0;url={oauth_url}">',
-                unsafe_allow_html=True
-            )
-            st.link_button(
-                "Continue to Google",
-                oauth_url,
-                use_container_width=True
-            )
-        else:
-            st.error("Supabase did not return a Google sign-in URL.")
+            if oauth_url:
+                st.markdown(
+                    f'<meta http-equiv="refresh" content="0;url={oauth_url}">',
+                    unsafe_allow_html=True
+                )
+                st.link_button(
+                    "Continue to Google",
+                    oauth_url,
+                    use_container_width=True
+                )
+            else:
+                st.error("Supabase did not return a Google sign-in URL.")
 
-    except Exception as error:
-        st.error(f"Could not start Google sign-in: {error}")
+        except Exception as error:
+            st.error(f"Could not start Google sign-in: {error}")
 
     login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
 
