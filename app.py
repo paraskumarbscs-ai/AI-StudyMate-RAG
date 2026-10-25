@@ -24,6 +24,7 @@ load_dotenv()
 # Uploaded PDF text/chunks/embeddings are deliberately NOT persisted to cloud.
 
 from supabase import create_client
+from supabase.client import ClientOptions
 
 
 def get_config(name, default=""):
@@ -41,11 +42,22 @@ SUPABASE_KEY = get_config("SUPABASE_ANON_KEY") or get_config("SUPABASE_PUBLISHAB
 APP_URL = get_config("APP_URL", "http://localhost:8501").rstrip("/")
 
 
+class StreamlitStorage:
+    """Custom storage to keep the PKCE verifier safe across Streamlit reruns/redirects."""
+    def get_item(self, key: str) -> str | None:
+        return st.session_state.get(key)
+
+    def set_item(self, key: str, value: str) -> None:
+        st.session_state[key] = value
+
+    def remove_item(self, key: str) -> None:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
 def get_supabase():
     """Keep one Supabase client per Streamlit browser session.
-
-    The same client must survive Streamlit reruns so the PKCE verifier created
-    during Google sign-in is still available when Supabase redirects back.
+    Backed by custom StreamlitStorage to safely survive the Google OAuth redirect.
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError(
@@ -54,9 +66,11 @@ def get_supabase():
         )
 
     if "_sb_client" not in st.session_state:
+        opts = ClientOptions(storage=StreamlitStorage())
         st.session_state["_sb_client"] = create_client(
             SUPABASE_URL,
-            SUPABASE_KEY
+            SUPABASE_KEY,
+            options=opts
         )
     return st.session_state["_sb_client"]
 
@@ -206,10 +220,26 @@ def show_auth_screen():
             st.session_state.google_oauth_url = None
 
     if st.session_state.get("google_oauth_url"):
-        st.link_button(
-            "Continue with Google",
-            st.session_state.google_oauth_url,
-            use_container_width=True
+        oauth_url = st.session_state.google_oauth_url
+        # Injecting an HTML link with target="_self" ensures navigation happens
+        # in the same browser tab, preserving the Streamlit session state and PKCE verifier.
+        st.markdown(
+            f'''
+            <a href="{oauth_url}" target="_self" style="
+                display: block;
+                width: 100%;
+                text-align: center;
+                background-color: #7047D7;
+                color: #FFFFFF;
+                padding: 10px 0;
+                border-radius: 10px;
+                font-weight: 600;
+                text-decoration: none;
+                margin-bottom: 1rem;
+                font-family: sans-serif;
+            ">Continue with Google</a>
+            ''',
+            unsafe_allow_html=True
         )
     else:
         st.error("Could not initialize Google sign-in.")
