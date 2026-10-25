@@ -123,6 +123,8 @@ def handle_oauth_callback():
         st.caption("The sign-in code may have expired or its PKCE verifier is missing. Start a fresh Google sign-in.")
         st.query_params.clear()
         st.session_state.pop("google_oauth_url", None)
+        # Clear the old client to force a fresh PKCE verifier on next attempt
+        st.session_state.pop("_sb_client", None)
 
 
 def load_user_payload(user_id):
@@ -189,12 +191,9 @@ def show_auth_screen():
         st.error("Supabase configuration is missing. Check SUPABASE_URL and SUPABASE_ANON_KEY in .env.")
         st.code("SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co\nSUPABASE_ANON_KEY=YOUR_PUBLISHABLE_OR_ANON_KEY")
         return
-        
-    if st.button(
-        "Continue with Google",
-        key="start_google_oauth",
-        use_container_width=True
-    ):
+
+    # Generate the OAuth URL upfront so it cleanly saves the PKCE state BEFORE navigation
+    if "google_oauth_url" not in st.session_state:
         try:
             oauth = supabase.auth.sign_in_with_oauth({
                 "provider": "google",
@@ -202,20 +201,18 @@ def show_auth_screen():
                     "redirect_to": APP_URL
                 }
             })
-
-            oauth_url = getattr(oauth, "url", None)
-
-            if oauth_url:
-                # Removed the extra st.link_button to prevent duplicate buttons.
-                st.markdown(
-                    f'<meta http-equiv="refresh" content="0;url={oauth_url}">',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.error("Supabase did not return a Google sign-in URL.")
-
+            st.session_state.google_oauth_url = getattr(oauth, "url", None)
         except Exception as error:
-            st.error(f"Could not start Google sign-in: {error}")
+            st.session_state.google_oauth_url = None
+
+    if st.session_state.get("google_oauth_url"):
+        st.link_button(
+            "Continue with Google",
+            st.session_state.google_oauth_url,
+            use_container_width=True
+        )
+    else:
+        st.error("Could not initialize Google sign-in.")
 
     login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
 
@@ -455,7 +452,8 @@ h1, h2, h3, h4, p, li, label {{
 /* FIX: all Streamlit buttons have readable text */
 .stButton > button,
 .stDownloadButton > button,
-[data-testid="stFormSubmitButton"] > button {{
+[data-testid="stFormSubmitButton"] > button,
+.stLinkButton > a {{
     background-color: {C["accent"]} !important;
     color: #FFFFFF !important;
     border: 1px solid {C["accent"]} !important;
@@ -472,21 +470,24 @@ h1, h2, h3, h4, p, li, label {{
 .stDownloadButton > button p,
 .stDownloadButton > button span,
 .stDownloadButton > button div,
-[data-testid="stFormSubmitButton"] button p {{
+[data-testid="stFormSubmitButton"] button p,
+.stLinkButton > a p {{
     color: #FFFFFF !important;
     opacity: 1 !important;
 }}
 
 .stButton > button:hover,
 .stDownloadButton > button:hover,
-[data-testid="stFormSubmitButton"] > button:hover {{
+[data-testid="stFormSubmitButton"] > button:hover,
+.stLinkButton > a:hover {{
     background-color: {C["hover"]} !important;
     color: #FFFFFF !important;
     border-color: {C["hover"]} !important;
 }}
 
 .stButton > button:focus,
-.stDownloadButton > button:focus {{
+.stDownloadButton > button:focus,
+.stLinkButton > a:focus {{
     color: #FFFFFF !important;
     border-color: #AC8BFF !important;
     box-shadow: 0 0 0 2px #AC8BFF !important;
