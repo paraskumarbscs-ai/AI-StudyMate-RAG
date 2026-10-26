@@ -40,24 +40,52 @@ SUPABASE_KEY = get_config("SUPABASE_ANON_KEY") or get_config("SUPABASE_PUBLISHAB
 APP_URL = get_config("APP_URL", "http://localhost:8501").rstrip("/")
 
 
-# --- GLOBAL SERVER STORAGE FOR PKCE VERIFIER ---
-# Streamlit wipes session state when navigating away to Google and back.
-# We store the OAuth verifier in server memory safely so it survives the redirect.
-_SERVER_SHARED_MEMORY = {}
-_MEMORY_LOCK = threading.Lock()
+# --- DISK-BASED STORAGE FOR PKCE VERIFIER ---
+# Streamlit Cloud uses multiple worker processes. In-memory dictionaries will fail 
+# if the callback hits a different worker. We write the verifier to a local file instead.
+_OAUTH_FILE = ".oauth_state.json"
+_OAUTH_LOCK = threading.Lock()
 
-class ServerSideStorage:
+class FileStorage:
+    def __init__(self):
+        with _OAUTH_LOCK:
+            if not os.path.exists(_OAUTH_FILE):
+                with open(_OAUTH_FILE, "w") as f:
+                    json.dump({}, f)
+
     def get_item(self, key):
-        with _MEMORY_LOCK:
-            return _SERVER_SHARED_MEMORY.get(key)
+        with _OAUTH_LOCK:
+            try:
+                with open(_OAUTH_FILE, "r") as f:
+                    return json.load(f).get(key)
+            except Exception:
+                return None
 
     def set_item(self, key, value):
-        with _MEMORY_LOCK:
-            _SERVER_SHARED_MEMORY[key] = str(value)
+        with _OAUTH_LOCK:
+            try:
+                data = {}
+                if os.path.exists(_OAUTH_FILE):
+                    with open(_OAUTH_FILE, "r") as f:
+                        data = json.load(f)
+                data[key] = str(value)
+                with open(_OAUTH_FILE, "w") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
 
     def remove_item(self, key):
-        with _MEMORY_LOCK:
-            _SERVER_SHARED_MEMORY.pop(key, None)
+        with _OAUTH_LOCK:
+            try:
+                if os.path.exists(_OAUTH_FILE):
+                    with open(_OAUTH_FILE, "r") as f:
+                        data = json.load(f)
+                    if key in data:
+                        del data[key]
+                        with open(_OAUTH_FILE, "w") as f:
+                            json.dump(data, f)
+            except Exception:
+                pass
 
 
 try:
@@ -76,9 +104,9 @@ def get_supabase():
             "SUPABASE_ANON_KEY in your .env file."
         )
 
-    # Initialize client with the ServerSide storage mapped to memory
+    # Initialize client with the FileStorage mapped to disk
     if "_sb_client" not in st.session_state:
-        storage = ServerSideStorage()
+        storage = FileStorage()
         
         if ClientOptions:
             opts = ClientOptions(storage=storage)
@@ -131,11 +159,6 @@ def accept_auth_session(session):
     st.session_state.auth_user_id = str(session.user.id)
     st.session_state.auth_email = session.user.email or ""
     st.session_state.account_data_loaded = False
-    
-    # Flush global memory immediately after successful login to keep memory clean
-    with _MEMORY_LOCK:
-        _SERVER_SHARED_MEMORY.clear()
-        
     return True
 
 
